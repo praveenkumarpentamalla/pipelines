@@ -1,0 +1,31 @@
+#!/bin/bash
+
+echo "========== Git Pull =========="
+git config --global --add safe.directory $(pwd)
+git stash || true
+git pull origin main || true
+
+echo "========== Python & Bandit Setup =========="
+python3 --version || sudo apt install -y python3
+pip3 --version || sudo apt install -y python3-pip
+pip3 install --upgrade pip
+pip3 install bandit
+
+echo "========== Run Bandit =========="
+bandit -ll -ii -r . -f json -o bandit-report.json || true
+
+echo "========== Docker Build =========="
+docker build -f Dockerfile -t myapp:latest .
+
+echo "========== Install Docker Scout =========="
+curl -fsSL https://raw.githubusercontent.com/docker/scout-cli/main/install.sh -o install-scout.sh
+sh install-scout.sh
+
+echo "========== Docker Login =========="
+echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+
+echo "========== Docker Scout Scan =========="
+docker scout quickview myapp:latest || true
+docker scout cves myapp:latest --only-severities critical,high --output sarif > scout-report.sarif || true
+
+echo "========== Build Completed =========="
