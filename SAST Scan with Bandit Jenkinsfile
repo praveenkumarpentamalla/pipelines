@@ -1,0 +1,80 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKERHUB_USER = credentials('dockerhub-username')   // Setup in Jenkins Credentials
+        DOCKERHUB_PASS = credentials('dockerhub-password')
+    }
+
+    stages {
+
+        stage('Checkout Code') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Git Pull (Refresh Repo)') {
+            steps {
+                sh '''
+                    echo "Refreshing the repo with git pull..."
+                    git config --global --add safe.directory $(pwd)
+                    git stash || true
+                    git pull origin main || true
+                '''
+            }
+        }
+
+        stage('SAST Scan - Bandit') {
+            steps {
+                sh '''
+                    echo "Installing Bandit..."
+                    pip install --upgrade pip
+                    pip install bandit
+
+                    echo "Running Bandit scan..."
+                    bandit -ll -ii -r . -f json -o bandit-report.json || true
+                '''
+            }
+        }
+
+        stage('Archive Bandit Report') {
+            steps {
+                archiveArtifacts artifacts: 'bandit-report.json', fingerprint: true
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh '''
+                    echo "Building Docker image..."
+                    docker build -f Dockerfile -t myapp:latest .
+                '''
+            }
+        }
+
+        stage('Docker Scout Scan') {
+            steps {
+                sh '''
+                    echo "Installing Docker Scout CLI..."
+                    curl -fsSL https://raw.githubusercontent.com/docker/scout-cli/main/install.sh -o install-scout.sh
+                    sh install-scout.sh
+
+                    echo "Authenticating with DockerHub..."
+                    echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
+
+                    echo "Running Docker Scout scan..."
+                    docker scout quickview myapp:latest || true
+                    docker scout cves myapp:latest --only-severities critical,high --output sarif > scout-report.sarif || true
+                '''
+            }
+        }
+
+        stage('Archive Docker Scout Report') {
+            steps {
+                archiveArtifacts artifacts: 'scout-report.sarif', fingerprint: true
+            }
+        }
+
+    }
+}
