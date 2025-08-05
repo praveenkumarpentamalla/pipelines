@@ -253,11 +253,3 @@ You can adjust test commands like:
 | Long-term scalability       | ✅            | ⚠️            |
 
 ---
-
-Would you like:
-
-* These jobs exported as files?
-* Slack/Email notifications on failure?
-* Jenkinsfile adapted to your current Django repo?
-
-Let me know and I’ll tailor it for you.
