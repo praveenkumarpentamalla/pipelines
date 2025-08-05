@@ -1,0 +1,263 @@
+Here’s a **complete Jenkins pipeline job and freestyle job setup** for a **Django project**, covering:
+
+* ✅ Unit Tests
+* ✅ Integration Tests
+* ✅ Linting (Static Code Analysis)
+* ✅ Security Scans (Bandit)
+* ✅ Code Coverage
+* ✅ Smoke Tests
+* ✅ E2E/UI Tests (with Selenium or Playwright)
+* ✅ Docker image build
+* ✅ Docker image scan
+* ✅ DockerHub push
+
+---
+
+## 🔧 Prerequisites (for both jobs)
+
+1. Python 3.8+ installed on Jenkins agent
+2. Docker installed
+3. Git repository with Django project
+4. Requirements in `requirements.txt`
+5. `pytest`, `coverage`, `flake8`, `bandit`, `playwright`, etc., installed
+6. DockerHub credentials stored in Jenkins as:
+
+   * `dockerhub-username` (Secret text)
+   * `dockerhub-password` (Secret text)
+
+---
+
+## 📄 Jenkins **Pipeline Job** (`Jenkinsfile`)
+
+```groovy
+pipeline {
+    agent any
+
+    environment {
+        DOCKERHUB_USER = credentials('dockerhub-username')
+        DOCKERHUB_PASS = credentials('dockerhub-password')
+    }
+
+    stages {
+
+        stage('Checkout Code') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Setup Python Environment') {
+            steps {
+                sh '''
+                    python3 -m venv venv
+                    source venv/bin/activate
+                    pip install --upgrade pip
+                    pip install -r requirements.txt
+                    pip install flake8 bandit coverage pytest pytest-django playwright
+                    playwright install
+                '''
+            }
+        }
+
+        stage('Linting') {
+            steps {
+                sh 'flake8 . || true'
+            }
+        }
+
+        stage('Security Scan - Bandit') {
+            steps {
+                sh 'bandit -ll -ii -r . -f json -o bandit-report.json || true'
+            }
+        }
+
+        stage('Unit Tests + Coverage') {
+            steps {
+                sh '''
+                    source venv/bin/activate
+                    coverage run manage.py test
+                    coverage report
+                    coverage xml -o coverage.xml
+                '''
+            }
+        }
+
+        stage('Integration Tests') {
+            steps {
+                sh '''
+                    source venv/bin/activate
+                    pytest tests/integration/
+                '''
+            }
+        }
+
+        stage('Smoke Tests') {
+            steps {
+                sh '''
+                    source venv/bin/activate
+                    pytest tests/smoke/
+                '''
+            }
+        }
+
+        stage('E2E/UI Tests') {
+            steps {
+                sh '''
+                    source venv/bin/activate
+                    pytest tests/e2e/
+                '''
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh '''
+                    docker build -t my-django-app:latest .
+                '''
+            }
+        }
+
+        stage('Docker Scout Scan') {
+            steps {
+                sh '''
+                    curl -fsSL https://raw.githubusercontent.com/docker/scout-cli/main/install.sh -o install-scout.sh
+                    sh install-scout.sh
+                    docker scout quickview my-django-app:latest || true
+                    docker scout cves my-django-app:latest --only-severities critical,high --output sarif > scout-report.sarif || true
+                '''
+            }
+        }
+
+        stage('Push Docker Image') {
+            steps {
+                sh '''
+                    echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
+                    docker tag my-django-app:latest $DOCKERHUB_USER/my-django-app:latest
+                    docker push $DOCKERHUB_USER/my-django-app:latest
+                '''
+            }
+        }
+
+        stage('Archive Reports') {
+            steps {
+                archiveArtifacts artifacts: 'bandit-report.json, coverage.xml, scout-report.sarif', fingerprint: true
+            }
+        }
+    }
+}
+```
+
+---
+
+## 🛠 Jenkins **Freestyle Job** (Shell Script)
+
+### 🧱 Job Setup
+
+1. Create a Freestyle Job
+2. Source Code Management → Git (your repo)
+3. Add DockerHub credentials in “Use secret text(s)”:
+
+   * `DOCKERHUB_USERNAME`
+   * `DOCKERHUB_PASSWORD`
+4. Add **Build Step** → Execute Shell:
+
+```bash
+#!/bin/bash
+
+echo "Setting up Python environment..."
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+pip install flake8 bandit coverage pytest pytest-django playwright
+playwright install
+
+echo "Running Lint..."
+flake8 . || true
+
+echo "Running Security Scan..."
+bandit -ll -ii -r . -f json -o bandit-report.json || true
+
+echo "Running Unit Tests + Coverage..."
+coverage run manage.py test
+coverage report
+coverage xml -o coverage.xml
+
+echo "Running Integration Tests..."
+pytest tests/integration/
+
+echo "Running Smoke Tests..."
+pytest tests/smoke/
+
+echo "Running E2E/UI Tests..."
+pytest tests/e2e/
+
+echo "Building Docker Image..."
+docker build -t my-django-app:latest .
+
+echo "Installing Docker Scout..."
+curl -fsSL https://raw.githubusercontent.com/docker/scout-cli/main/install.sh -o install-scout.sh
+sh install-scout.sh
+
+echo "Running Docker Scout Scan..."
+docker scout quickview my-django-app:latest || true
+docker scout cves my-django-app:latest --only-severities critical,high --output sarif > scout-report.sarif || true
+
+echo "Pushing Docker Image..."
+echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+docker tag my-django-app:latest $DOCKERHUB_USERNAME/my-django-app:latest
+docker push $DOCKERHUB_USERNAME/my-django-app:latest
+
+echo "Archiving reports (if plugin available)..."
+# Freestyle jobs can use post-build action: Archive artifacts
+```
+
+5. **Post-build actions** → Archive artifacts:
+
+```
+bandit-report.json, coverage.xml, scout-report.sarif
+```
+
+---
+
+## 📁 Recommended Django Project Test Structure
+
+```
+myproject/
+├── manage.py
+├── requirements.txt
+├── myapp/
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   ├── smoke/
+│   └── e2e/
+```
+
+You can adjust test commands like:
+
+* `pytest tests/unit/`
+* `pytest tests/integration/`
+
+---
+
+## ✅ Summary Comparison
+
+| Feature                     | Pipeline Job | Freestyle Job |
+| --------------------------- | ------------ | ------------- |
+| Reusable code (Jenkinsfile) | ✅            | ❌             |
+| Visual stages               | ✅            | ❌             |
+| Easy to version in Git      | ✅            | ❌             |
+| Advanced control flow       | ✅            | ❌             |
+| Simplicity                  | ⚠️           | ✅             |
+| Long-term scalability       | ✅            | ⚠️            |
+
+---
+
+Would you like:
+
+* These jobs exported as files?
+* Slack/Email notifications on failure?
+* Jenkinsfile adapted to your current Django repo?
+
+Let me know and I’ll tailor it for you.
